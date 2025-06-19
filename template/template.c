@@ -28,6 +28,7 @@ bool can_move_inside_maze(int row, int col, int direction);
 bool can_reenter_maze(int exit_direction, int current_direction, char movement_type);
 void print_location(void);
 void shortest_path(int player_row, int player_col, int direction, bool inside_maze);
+void solve_maze_lh();
 
 // mouse, rotation, and scaling variables
 float scale_factor = 1.0f; 
@@ -1267,6 +1268,17 @@ void idle() {
         process_next_movement();
     }
     
+    // Auto-solve maze using left-hand rule if enabled
+    if (maze_solving_in_progress && !is_animating && queue_front == queue_back) {
+        // Check if maze is solved (player has exited through the exit)
+        if (!inside_maze && (player_row == 0 && player_col == maze_x_size - 1) && direction == 0) {
+            maze_solving_in_progress = 0; // Stop auto-solving
+            printf("Maze solved using left-hand rule!\n");
+        } else {
+            solve_maze_lh(); // Continue solving
+        }
+    }
+    
     if (resetting && reset_step < reset_steps) {
         // Incrementally reduce prev_ctm by delta_ctm to approach the identity matrix
         prev_ctm = mm_subtraction(prev_ctm, delta_ctm);
@@ -1330,43 +1342,62 @@ void resetPlatform() {
 }
 
 void solve_maze_lh() {
-    // Perform one step of the left-hand rule
-    if (!inside_maze) {
-        // If outside, turn to face north and move forward into the maze
-        while (direction != 0) {
-            while(!is_animating){
-                turn_left();
-            }
-        }
-        forward();
-    }
-
-    if (!(player_row == 0 && player_col == maze_x_size - 1)) {
-        int left_direction = (direction + 3) % 4;
-
-        if (can_move_inside_maze(player_row, player_col, left_direction)) {
-            turn_left();
-            forward();
-        } else if (can_move_inside_maze(player_row, player_col, direction)) {
-            forward();
-        } else {
-            turn_right();
-            if (!can_move_inside_maze(player_row, player_col, direction)) {
-                turn_right();
-                forward();
-            }
-        }
-
-        glutPostRedisplay();
+    // Don't execute if currently animating or if there are queued movements
+    if (is_animating || queue_front != queue_back) {
         return;
     }
-
-    if (direction != 0) {
-        turn_left();
-    } else {
-        forward();
+    
+    // Step 1: Handle entry into maze
+    if (!inside_maze) {
+        // Turn to face north if not already facing north
+        if (direction != 0) {
+            enqueue_movement(TURN_LEFT);
+            return;
+        } else {
+            // Facing north, now enter the maze
+            enqueue_movement(MOVE_FORWARD);
+            return;
+        }
     }
-
+    
+    // Step 2: Check if we've reached the exit
+    if (player_row == 0 && player_col == maze_x_size - 1) {
+        // At the exit, face north and exit
+        if (direction != 0) {
+            enqueue_movement(TURN_LEFT);
+            return;
+        } else {
+            enqueue_movement(MOVE_FORWARD); // Exit the maze
+            return;
+        }
+    }
+    
+    // Step 3: Implement proper left-hand rule
+    // Left-hand rule: Always try left first, then straight, then right, then turn around
+    
+    int left_direction = (direction + 3) % 4;  // Turn left from current direction
+    int right_direction = (direction + 1) % 4; // Turn right from current direction
+    
+    if (can_move_inside_maze(player_row, player_col, left_direction)) {
+        // Can turn left - this is the preferred direction in left-hand rule
+        // Queue both turn left AND move forward to ensure proper sequencing
+        enqueue_movement(TURN_LEFT);
+        enqueue_movement(MOVE_FORWARD);
+    } else if (can_move_inside_maze(player_row, player_col, direction)) {
+        // Can't turn left, but can go straight
+        enqueue_movement(MOVE_FORWARD);
+    } else if (can_move_inside_maze(player_row, player_col, right_direction)) {
+        // Can't go left or straight, try right
+        // Queue turn right AND move forward
+        enqueue_movement(TURN_RIGHT);
+        enqueue_movement(MOVE_FORWARD);
+    } else {
+        // Dead end - turn around
+        // Turn right twice to face the opposite direction
+        enqueue_movement(TURN_RIGHT);
+        enqueue_movement(TURN_RIGHT);
+    }
+    
     glutPostRedisplay();
 }
 
@@ -1523,7 +1554,15 @@ void keyboard(unsigned char key, int mousex, int mousey) {
         resetPlatform();
     }
     else if (key == 'k') {
-        solve_maze_lh(); // Solve the maze via left-hand rule
+        if (maze_solving_in_progress) {
+            // Stop automatic solving
+            maze_solving_in_progress = 0;
+            printf("Left-hand rule auto-solving stopped.\n");
+        } else {
+            // Start automatic solving
+            maze_solving_in_progress = 1;
+            printf("Left-hand rule auto-solving started. Press 'k' again to stop.\n");
+        }
     }
     else if (key == 'l') {
         if(enable_light == 0) enable_light = 1;
